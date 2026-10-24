@@ -1,6 +1,6 @@
 {
   "title": "Steal an Egg",
-  "description": "150+ features: auto-steal, egg sniper, teleports, anti-AFK, full GUI. Keyless, tracker-free, auto-reloads after teleport. v1.5: fixed silent no-op in Steal An Egg (UI library game gate still pointed at Steal a Brainrot's GameId) + loud loader diagnostics. v1.4: executor buffer polyfill (Delta, Codex, Arceus X, Fluxus, Solara, etc).",
+  "description": "150+ features: auto-steal, egg sniper, teleports, anti-AFK, full GUI. Keyless, tracker-free, auto-reloads after teleport. v1.6: fixed the REAL root cause of the silent no-op (the Luraph payload RETURNS the main script function instead of running it - the loader now calls it) + removed all third-party promo (Venyx ad tab with Luarmor auto-exec, Discord invite tab, DiscordLink popup) - zero external promo links left. v1.5: game-gate fix + loud diagnostics (UI check at 20s & 60s). v1.4: executor buffer polyfill (Delta, Codex, Arceus X, Fluxus, Solara, etc).",
   "status": "working",
-  "version": "1.5"
+  "version": "1.6"
 }
