@@ -18,26 +18,26 @@ const siteUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
 
 export const metadata: Metadata = {
   ...(siteUrl ? { metadataBase: new URL(siteUrl) } : {}),
-  title: "ThorHub — Script Roblox Steal an Egg (Gratis, Tanpa Key)",
+  title: "ThorHub Panel — Hosting Script & Loadstring Roblox",
   description:
-    "ThorHub: script lengkat 150+ fitur untuk Roblox Steal an Egg. Auto Steal, Auto Hatch, ESP, Combat, Auto Hop. Gratis, tanpa key, tanpa tracking.",
+    "Panel hosting script pribadi ala Luarmor: upload file .lua, dapatkan loadstring instan untuk banyak game, auto-commit GitHub + auto-deploy Vercel. Tanpa key, tanpa tracking.",
   keywords: [
     "ThorHub",
-    "Steal an Egg",
+    "ThorHub Panel",
+    "script hosting",
+    "loadstring",
     "Roblox",
-    "script",
-    "auto steal",
-    "auto hatch",
-    "ESP",
+    "Steal an Egg",
+    "executor",
   ],
   authors: [{ name: "ThorHub" }],
   icons: {
     icon: "/assets/logo.png",
   },
   openGraph: {
-    title: "ThorHub — Script Steal an Egg",
+    title: "ThorHub Panel — Hosting Script & Loadstring",
     description:
-      "150+ fitur · Gratis · Tanpa Key · Tanpa Tracking. Petir Thor menyambar egg Eternal.",
+      "Upload .lua → loadstring instan. Multi-game, auto-commit GitHub, auto-deploy Vercel. Petir Thor menyambar.",
     siteName: "ThorHub",
     type: "website",
     images: ["/assets/banner.png"],

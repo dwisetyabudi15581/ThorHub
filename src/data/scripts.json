@@ -1,0 +1,25 @@
+{
+  "scripts": [
+    {
+      "slug": "thorhub",
+      "name": "ThorHub — Steal an Egg",
+      "game": "Steal an Egg",
+      "gameId": 10563114921,
+      "version": "2.0.0",
+      "description": "150+ fitur: Auto Steal dengan filter zona & rarity, Auto Hatch + Equip, ESP egg/pemain/guard, Combat aura, Auto Hop server pintar, config system. Gratis, tanpa key, tanpa tracking.",
+      "file": "/ThorHub.lua",
+      "sizeBytes": 1321263,
+      "updatedAt": "2026-10-24",
+      "features": [
+        "Auto Steal",
+        "Auto Hatch",
+        "Auto Sell",
+        "Auto Fuse",
+        "ESP",
+        "Combat",
+        "Auto Hop",
+        "Config System"
+      ]
+    }
+  ]
+}
