@@ -30,6 +30,11 @@ jobs:
           if git diff --cached --quiet; then
             echo "index already up to date - nothing to commit"
           else
-            git commit -m "chore: regenerate script index [skip ci]"
+            # NOTE: no "[skip ci]" here — Vercel SKIPS deploying commits whose
+            # message contains [skip ci], and this commit must deploy because
+            # it carries the fresh index. Loop safety is already guaranteed:
+            # the paths filter above only triggers on script/config changes,
+            # and pushes made with GITHUB_TOKEN never re-trigger workflows.
+            git commit -m "chore: regenerate script index"
             git push
           fi

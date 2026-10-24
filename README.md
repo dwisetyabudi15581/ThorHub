@@ -32,7 +32,7 @@ Even if the GitHub repo disappears, the last Vercel deployment keeps serving eve
 
 1. Log in at [vercel.com](https://vercel.com) with the **same GitHub account** that owns this repo (`dwisetyabudi15581`).
 2. **Add New → Project** → import the `thorhub` repo.
-3. Name the project exactly **`thorhub`** so it claims `thorhub.vercel.app`. Framework preset **Other** is auto-detected; leave every build setting empty — the site is pre-built.
+3. Name the project exactly **`thorhub`** so it claims `thorhub.vercel.app`. Leave every build setting empty — the site is pre-built static. **The dashboard framework preset doesn't matter:** `vercel.json` ships `"framework": null`, which overrides the preset per-deployment (this is what fixes builds that fail with `NEXT_NO_VERSION` / "built using `next build`" when the project was imported with the Next.js preset). With no framework selected, Vercel serves the `public/` directory as-is.
 4. Click **Deploy**. Done — `https://thorhub.vercel.app` is live.
 
 > If the name `thorhub` is taken, Vercel appends a random suffix. Either rename the project in Settings, or connect any custom domain under Settings → Domains. Then update `base_url` in `config.json` — the index regenerates itself on the next push. (Note: the *Steal an Egg* build embeds an auto-load-after-teleport URL pointing at `thorhub.vercel.app/scripts/steal-an-egg/ThorHub.lua` — if you change the domain, that embedded URL must be rebuilt too.)
