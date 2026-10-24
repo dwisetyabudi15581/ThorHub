@@ -1,6 +1,6 @@
 {
   "title": "Steal an Egg",
-  "description": "150+ features: auto-steal, egg sniper, teleports, anti-AFK, full GUI. Keyless, tracker-free, auto-reloads after teleport. v1.4: executor buffer polyfill - now works on executors without native buffer support (Delta, Codex, Arceus X, Fluxus, Solara, etc).",
+  "description": "150+ features: auto-steal, egg sniper, teleports, anti-AFK, full GUI. Keyless, tracker-free, auto-reloads after teleport. v1.5: fixed silent no-op in Steal An Egg (UI library game gate still pointed at Steal a Brainrot's GameId) + loud loader diagnostics. v1.4: executor buffer polyfill (Delta, Codex, Arceus X, Fluxus, Solara, etc).",
   "status": "working",
-  "version": "1.4"
+  "version": "1.5"
 }
