@@ -1,0 +1,478 @@
+#!/usr/bin/env python3
+"""
+THORHUB static index generator
+==============================
+Scans public/scripts/**/*.(lua|luau) plus optional info.json sidecars and
+regenerates public/index.html + public/404.html — a dark, Luarmor-style
+catalog page with a copyable loadstring command for every hosted script.
+
+Usage:
+    python3 tools/generate_index.py
+
+Notes:
+- Zero third-party dependencies (pure stdlib).
+- index.html and 404.html are fully generated — never edit them by hand.
+- Optional per-game sidecar (public/scripts/<game>/info.json):
+    {
+      "title": "Pet Sim 99",
+      "description": "Auto-farm & hatch helper",
+      "status": "working",          # working | maintenance | down
+      "version": "1.0.0"
+    }
+- Run automatically by .github/workflows/update-index.yml on every push
+  that touches public/scripts/**, config.json or this file.
+"""
+
+import html
+import json
+import re
+import urllib.parse
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+PUBLIC = ROOT / "public"
+SCRIPTS_DIR = PUBLIC / "scripts"
+CONFIG_PATH = ROOT / "config.json"
+
+DEFAULTS = {
+    "base_url": "https://thorhub.vercel.app",
+    "site_name": "THORHUB",
+    "tagline": "Premium Roblox script hub",
+    "github_url": "https://github.com/dwisetyabudi15581/thorhub",
+}
+
+STATUS_MAP = {
+    "working": ("WORKING", "ok"),
+    "maintenance": ("MAINTENANCE", "warn"),
+    "down": ("DOWN", "bad"),
+}
+
+HEADER_LOGO = (
+    '<svg viewBox="0 0 48 48" aria-hidden="true">'
+    '<defs>'
+    '<linearGradient id="hg" x1="0" y1="0" x2="1" y2="1">'
+    '<stop offset="0" stop-color="#fde68a"/>'
+    '<stop offset=".55" stop-color="#fbbf24"/>'
+    '<stop offset="1" stop-color="#b45309"/>'
+    '</linearGradient>'
+    '<linearGradient id="hs" x1="0" y1="0" x2="0" y2="1">'
+    '<stop offset="0" stop-color="#93c5fd"/>'
+    '<stop offset="1" stop-color="#2563eb"/>'
+    '</linearGradient>'
+    '</defs>'
+    '<rect x="7" y="4" width="34" height="17" rx="4.5" fill="url(#hg)"/>'
+    '<rect x="7" y="4" width="34" height="6.5" rx="3.2" fill="#ffffff" opacity=".25"/>'
+    '<rect x="13" y="9" width="4" height="7" rx="1.6" fill="#78350f" opacity=".5"/>'
+    '<rect x="31" y="9" width="4" height="7" rx="1.6" fill="#78350f" opacity=".5"/>'
+    '<rect x="20.5" y="21" width="7" height="23" rx="3" fill="url(#hs)"/>'
+    '<rect x="22.7" y="21" width="2.6" height="23" rx="1.3" fill="#ffffff" opacity=".28"/>'
+    '</svg>'
+)
+
+GITHUB_MARK = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 '
+    '0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724'
+    '-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 '
+    '1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76'
+    '-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105'
+    '-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28'
+    '-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 '
+    '4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 '
+    '.315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>'
+)
+
+FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">'
+    '<rect x="7" y="4" width="34" height="17" rx="4.5" fill="#fbbf24"/>'
+    '<rect x="20.5" y="21" width="7" height="23" rx="3" fill="#3b82f6"/>'
+    '</svg>'
+)
+
+
+def prettify(slug):
+    words = re.sub(r"[-_]+", " ", slug).strip().split()
+    return " ".join(w[:1].upper() + w[1:] for w in words) if words else slug
+
+
+def load_config():
+    cfg = dict(DEFAULTS)
+    if CONFIG_PATH.exists():
+        try:
+            cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+        except Exception as exc:
+            print("[warn] config.json could not be parsed (%s); using defaults" % exc)
+    cfg["base_url"] = str(cfg["base_url"]).rstrip("/")
+    return cfg
+
+
+def scan_scripts(base_url):
+    games = []
+    if not SCRIPTS_DIR.exists():
+        return games
+    files = sorted(
+        p for p in SCRIPTS_DIR.rglob("*")
+        if p.is_file() and p.suffix.lower() in (".lua", ".luau")
+    )
+    for path in files:
+        rel = path.relative_to(PUBLIC).as_posix()
+        game_dir = path.parent
+        slug = game_dir.name if game_dir != SCRIPTS_DIR else path.stem
+        info = {}
+        sidecar = game_dir / "info.json"
+        if sidecar.is_file():
+            try:
+                info = json.loads(sidecar.read_text(encoding="utf-8"))
+            except Exception:
+                info = {}
+        status_key = str(info.get("status", "working")).strip().lower()
+        label, css = STATUS_MAP.get(status_key, STATUS_MAP["working"])
+        games.append({
+            "slug": slug,
+            "title": str(info.get("title") or prettify(slug)),
+            "description": str(info.get("description") or ""),
+            "version": str(info.get("version") or ""),
+            "status_label": label,
+            "status_css": css,
+            "rel": rel,
+            "url": "%s/%s" % (base_url, rel),
+            "size_kb": max(1, round(path.stat().st_size / 1024)),
+        })
+    return games
+
+
+def render_card(g, idx):
+    e = html.escape
+    ls = 'loadstring(game:HttpGet("%s"))()' % g["url"]
+    desc = ('        <p class="desc">' + e(g["description"]) + "</p>\n") if g["description"] else ""
+    ver = ('<span class="chip">' + e(g["version"]) + "</span>") if g["version"] else ""
+    search = e(" ".join([g["slug"], g["title"], g["status_label"], g["description"]]).lower())
+    return (
+        '      <article class="card" data-search="' + search + '">\n'
+        '        <div class="card-head">\n'
+        '          <h3>' + e(g["title"]) + "</h3>\n"
+        '          <span class="badge ' + g["status_css"] + '">' + g["status_label"] + "</span>\n"
+        "        </div>\n"
+        + desc +
+        '        <div class="meta">' + ver
+        + '<span class="chip">' + str(g["size_kb"]) + ' KB</span>'
+        + '<span class="chip mono">/' + e(g["rel"]) + "</span></div>\n"
+        '        <div class="loadbox">\n'
+        '          <span class="load-label">LOADSTRING</span>\n'
+        '          <div class="code-row">\n'
+        '            <code id="ls-' + str(idx) + '">' + e(ls) + "</code>\n"
+        "            <button type=\"button\" class=\"copybtn\" onclick=\"copyLoad('ls-"
+        + str(idx) + '\', this)\">COPY</button>' + "\n"
+        "          </div>\n"
+        "        </div>\n"
+        "      </article>"
+    )
+
+
+PAGE_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@@SITE_NAME@@ — Roblox Script Hub</title>
+<meta name="description" content="@@SITE_NAME@@: auto-indexed Roblox script hosting. Copy a loadstring, execute, done. No key system, no shorteners.">
+<link rel="icon" href="@@FAVICON@@">
+<style>
+:root{
+  --bg:#070b14;--card:rgba(148,163,184,.055);--line:rgba(96,165,250,.16);--line2:rgba(96,165,250,.30);
+  --txt:#e6edf6;--muted:#8fa0b8;--blue:#60a5fa;--blue-deep:#3b82f6;--gold:#fbbf24;--gold-deep:#f59e0b;
+  --ok:#34d399;--warn:#fbbf24;--bad:#f87171;
+  --mono:ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);font:16px/1.65 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-x:hidden}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;background:radial-gradient(900px 440px at 12% -8%,rgba(59,130,246,.17),transparent 60%),radial-gradient(720px 400px at 92% -4%,rgba(245,158,11,.11),transparent 60%),radial-gradient(1000px 600px at 50% 120%,rgba(37,99,235,.07),transparent 60%)}
+.wrap{max-width:1100px;margin:0 auto;padding:0 22px}
+header{position:sticky;top:0;z-index:50;background:rgba(7,11,20,.85);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.nav{display:flex;align-items:center;gap:6px;height:64px}
+.brand{display:flex;align-items:center;gap:11px;text-decoration:none;margin-right:8px}
+.brand svg{width:30px;height:30px;flex:none;filter:drop-shadow(0 0 9px rgba(251,191,36,.5))}
+.brand b{font-size:19px;font-weight:800;letter-spacing:.14em;background:linear-gradient(92deg,var(--blue) 10%,var(--gold) 90%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.spacer{flex:1}
+.nav a.lnk{color:var(--muted);text-decoration:none;font-size:14px;font-weight:500;padding:7px 11px;border-radius:8px;transition:.15s}
+.nav a.lnk:hover{color:var(--txt);background:rgba(96,165,250,.09)}
+.gh{display:inline-flex;align-items:center;gap:8px;color:var(--txt);text-decoration:none;font-size:13.5px;font-weight:600;border:1px solid var(--line2);border-radius:10px;padding:8px 15px;transition:.15s;background:rgba(96,165,250,.07)}
+.gh:hover{border-color:var(--blue);background:rgba(96,165,250,.14)}
+.gh svg{width:15px;height:15px;fill:currentColor}
+.hero{padding:78px 0 30px;text-align:center}
+.kicker{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.34em;color:var(--gold);border:1px solid rgba(251,191,36,.35);border-radius:999px;padding:7px 16px;background:rgba(251,191,36,.06);margin-bottom:22px}
+.hero h1{font-size:clamp(46px,9vw,84px);font-weight:900;letter-spacing:.13em;line-height:1.05;background:linear-gradient(94deg,#7cb8ff 5%,var(--blue) 38%,var(--gold) 78%,#ffe9a8);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 10px 34px rgba(59,130,246,.35))}
+.hero .tagline{color:var(--muted);max-width:640px;margin:18px auto 0;font-size:17px}
+.stats{display:flex;gap:13px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+.stat{border:1px solid var(--line);background:var(--card);border-radius:13px;padding:11px 20px;font-size:12.5px;font-weight:600;letter-spacing:.06em;color:var(--muted)}
+.stat b{display:block;font-size:19px;color:var(--txt);letter-spacing:.02em}
+.stat b.gold{color:var(--gold)}.stat b.blue{color:var(--blue)}
+.section{padding:54px 0 8px}
+.sec-head{margin-bottom:24px}
+.sec-title{font-size:26px;font-weight:800;letter-spacing:.02em;display:flex;align-items:center;gap:12px}
+.sec-title::before{content:"";width:26px;height:3px;border-radius:2px;background:linear-gradient(90deg,var(--blue),var(--gold))}
+.sec-sub{color:var(--muted);margin-top:8px;font-size:15px}
+.toolbar{display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.search{flex:1;min-width:240px;background:rgba(10,16,28,.8);border:1px solid var(--line2);border-radius:12px;color:var(--txt);font-size:15px;padding:12px 18px;outline:none;transition:.15s}
+.search:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,.18)}
+.search::placeholder{color:#5c6b82}
+.count{color:var(--muted);font-size:13.5px;white-space:nowrap}
+.count b{color:var(--gold)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:18px}
+.card{border:1px solid var(--line);background:linear-gradient(180deg,rgba(148,163,184,.075),rgba(148,163,184,.035));border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:14px;transition:.18s;position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:linear-gradient(90deg,var(--blue),var(--gold));opacity:.75}
+.card:hover{border-color:var(--line2);transform:translateY(-2px)}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.card h3{font-size:18.5px;font-weight:700;letter-spacing:.01em}
+.badge{font-size:10.5px;font-weight:800;letter-spacing:.13em;border-radius:7px;padding:4px 9px;flex:none}
+.badge.ok{color:var(--ok);background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.35)}
+.badge.warn{color:var(--warn);background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.35)}
+.badge.bad{color:var(--bad);background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.35)}
+.desc{color:var(--muted);font-size:14px;line-height:1.55}
+.meta{display:flex;flex-wrap:wrap;gap:7px}
+.chip{font-size:11.5px;font-weight:600;color:var(--muted);border:1px solid var(--line);background:rgba(10,16,28,.55);border-radius:7px;padding:3.5px 9px}
+.chip.mono{font-family:var(--mono);font-size:11px}
+.loadbox{margin-top:auto;background:rgba(5,9,17,.85);border:1px solid rgba(96,165,250,.22);border-radius:12px;padding:13px 14px}
+.load-label{display:block;font-size:10px;font-weight:800;letter-spacing:.22em;color:var(--gold);margin-bottom:9px}
+.code-row{display:flex;align-items:stretch;gap:9px}
+.loadbox code{flex:1;font-family:var(--mono);font-size:11.8px;line-height:1.5;color:#a5c8ff;word-break:break-all;align-self:center}
+.copybtn{flex:none;cursor:pointer;font-family:inherit;font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--blue);background:rgba(59,130,246,.13);border:1px solid rgba(96,165,250,.4);border-radius:8px;padding:9px 15px;transition:.15s}
+.copybtn:hover{background:rgba(59,130,246,.25);border-color:var(--blue)}
+.copybtn.copied{color:var(--ok);background:rgba(52,211,153,.13);border-color:rgba(52,211,153,.5)}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}
+.step{border:1px solid var(--line);background:var(--card);border-radius:15px;padding:24px}
+.step-num{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:#071018;background:linear-gradient(135deg,var(--gold),var(--gold-deep));margin-bottom:14px}
+.step h4{font-size:16px;font-weight:700;margin-bottom:7px}
+.step p{color:var(--muted);font-size:13.8px}
+.guide{border:1px solid var(--line);background:var(--card);border-radius:16px;padding:26px}
+.guide a{color:var(--blue)}
+.guide ol{margin:14px 0 0 18px;display:grid;gap:11px}
+.guide li{color:var(--muted);font-size:14.5px;line-height:1.6}
+.guide li code,.step p code{font-family:var(--mono);font-size:.9em;color:var(--gold);background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.18);border-radius:5px;padding:1.5px 6px}
+.gcode{display:block;font-family:var(--mono);font-size:12.5px;line-height:1.65;color:#a5c8ff;background:rgba(5,9,17,.9);border:1px solid rgba(96,165,250,.22);border-radius:11px;padding:16px 18px;margin-top:16px;overflow-x:auto;white-space:pre}
+.note{display:flex;gap:11px;margin-top:18px;border:1px solid rgba(251,191,36,.3);background:rgba(251,191,36,.06);border-radius:11px;padding:13px 16px;font-size:13.5px;color:#d9c58a}
+.note b{color:var(--gold)}
+.empty{border:1px dashed var(--line2);border-radius:15px;padding:44px 20px;text-align:center;color:var(--muted)}
+.empty h3{color:var(--txt);font-size:17px;margin-bottom:8px}
+footer{margin-top:70px;border-top:1px solid var(--line);padding:30px 0 38px;text-align:center;color:#5c6b82;font-size:13px;line-height:1.9}
+footer b{background:linear-gradient(90deg,var(--blue),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
+footer a{color:var(--muted)}
+@media(max-width:700px){.nav a.lnk{display:none}.hero{padding:56px 0 22px}.section{padding:42px 0 6px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/">@@LOGO@@<b>@@SITE_NAME@@</b></a>
+    <span class="spacer"></span>
+    <a class="lnk" href="#scripts">Scripts</a>
+    <a class="lnk" href="#how">How to use</a>
+    <a class="lnk" href="#add">Add a game</a>
+    <a class="gh" href="@@GITHUB_URL@@" target="_blank" rel="noopener">@@GHMARK@@ GitHub</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div class="kicker">ROBLOX SCRIPT HOSTING</div>
+    <h1>@@SITE_NAME@@</h1>
+    <p class="tagline">@@TAGLINE@@ — every script is auto-indexed and served straight from Vercel's edge network. No key system, no link shorteners, no dead links.</p>
+    <div class="stats">
+      <div class="stat"><b class="gold">@@SCRIPTS_COUNT@@</b>SCRIPTS HOSTED</div>
+      <div class="stat"><b class="blue">AUTO</b>INDEXED ON UPLOAD</div>
+      <div class="stat"><b>VERCEL</b>EDGE CDN</div>
+    </div>
+  </section>
+
+  <section class="section" id="scripts">
+    <div class="sec-head">
+      <h2 class="sec-title">Script Library</h2>
+      <p class="sec-sub">Pick a game, hit COPY, paste it into your executor. Script paths are case-sensitive.</p>
+    </div>
+    <div class="toolbar">
+      <input id="q" class="search" type="search" placeholder="Search games..." autocomplete="off" spellcheck="false">
+      <span class="count"><b id="visible-count">@@SCRIPTS_COUNT@@</b> shown</span>
+    </div>
+    <div class="grid">
+@@CARDS@@
+    </div>
+    <div id="empty-state" class="empty" style="display:none">
+      <h3>No scripts match your search</h3>
+      <p>Try a different game name.</p>
+    </div>
+  </section>
+
+  <section class="section" id="how">
+    <div class="sec-head">
+      <h2 class="sec-title">How to use</h2>
+      <p class="sec-sub">Three steps — no key system, no ads, no waiting.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h4>Get an executor</h4>
+        <p>Install a Roblox script executor that supports <code>loadstring</code> and <code>HttpGet</code> (Synapse Z, Wave, Delta, Codex, Solara...). Mobile executors work too.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h4>Copy a loadstring</h4>
+        <p>Tap <code>COPY</code> on any card above — the command already points at this site, nothing to edit.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h4>Execute in-game</h4>
+        <p>Join the game, paste the loadstring into the executor window and press Execute. The @@SITE_NAME@@ GUI appears instantly.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="add">
+    <div class="sec-head">
+      <h2 class="sec-title">Adding a new game</h2>
+      <p class="sec-sub">Site-owner workflow — upload a file, and this page rebuilds itself.</p>
+    </div>
+    <div class="guide">
+      <ol>
+        <li>Open <a href="@@GITHUB_URL@@/tree/main/public/scripts" target="_blank" rel="noopener">public/scripts</a> on GitHub, then <code>Add file</code> &rarr; <code>Upload files</code>.</li>
+        <li>Create a folder named after the game (type <code>game-name/</code> in the filename box) and drop your <code>.lua</code> inside — e.g. <code>public/scripts/pet-sim-99/ThorHub.lua</code>.</li>
+        <li>Optional: add an <code>info.json</code> in the same folder to set the card title, description, version and status badge (<code>working</code> / <code>maintenance</code> / <code>down</code>).</li>
+        <li>Commit — GitHub Actions regenerates this page and Vercel deploys it in about a minute. The new loadstring goes live at <code>@@BASE_URL@@/scripts/game-name/ThorHub.lua</code>.</li>
+      </ol>
+      <span class="gcode">{
+  "title": "Pet Sim 99",
+  "description": "Auto-farm, hatch &amp; trade helper",
+  "status": "working",
+  "version": "1.0.0"
+}</span>
+      <div class="note"><span><b>Runtime independence:</b> loadstrings only ever hit this Vercel domain. GitHub is used purely as the upload/edit backend and is never contacted by the game client.</span></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <b>@@SITE_NAME@@</b> &middot; @@YEAR@@<br>
+    For educational purposes only. Not affiliated with Roblox Corporation.<br>
+    Auto-generated by <a href="@@GITHUB_URL@@/blob/main/tools/generate_index.py" target="_blank" rel="noopener">tools/generate_index.py</a> — do not edit index.html manually.
+  </div>
+</footer>
+
+<script>
+function copyLoad(id, btn){
+  var el = document.getElementById(id);
+  if(!el) return;
+  var text = el.textContent;
+  function ok(){
+    btn.classList.add('copied'); btn.textContent = 'COPIED';
+    setTimeout(function(){ btn.classList.remove('copied'); btn.textContent = 'COPY'; }, 1600);
+  }
+  function legacy(){
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); ok(); } catch(e){}
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(ok, legacy);
+  } else { legacy(); }
+}
+(function(){
+  var input = document.getElementById('q');
+  if (!input) return;
+  input.addEventListener('input', function(){
+    var q = input.value.trim().toLowerCase();
+    var cards = document.querySelectorAll('.card');
+    var visible = 0;
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i];
+      var hit = !q || (c.getAttribute('data-search') || '').indexOf(q) !== -1;
+      c.style.display = hit ? '' : 'none';
+      if (hit) visible++;
+    }
+    var es = document.getElementById('empty-state');
+    if (es) es.style.display = visible ? 'none' : '';
+    var vc = document.getElementById('visible-count');
+    if (vc) vc.textContent = String(visible);
+  });
+})();
+</script>
+</body>
+</html>
+"""
+
+PAGE_404 = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>404 — @@SITE_NAME@@</title>
+<link rel="icon" href="@@FAVICON@@">
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#070b14;color:#e6edf6;font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;text-align:center;padding:20px}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(700px 400px at 50% -10%,rgba(59,130,246,.16),transparent 60%),radial-gradient(600px 360px at 90% 110%,rgba(245,158,11,.10),transparent 60%)}
+.code{font-size:88px;font-weight:900;line-height:1;background:linear-gradient(94deg,#7cb8ff,#3b82f6 40%,#fbbf24);-webkit-background-clip:text;background-clip:text;color:transparent}
+h1{font-size:22px;margin:18px 0 10px}
+p{color:#8fa0b8;max-width:420px;margin:0 auto 26px}
+p code{font-family:ui-monospace,Consolas,monospace;color:#fbbf24;font-size:.9em}
+a.btn{display:inline-block;text-decoration:none;color:#071018;font-weight:800;font-size:14px;letter-spacing:.08em;border-radius:10px;padding:12px 26px;background:linear-gradient(135deg,#fbbf24,#f59e0b)}
+</style>
+</head>
+<body>
+<main>
+  <div class="code">404</div>
+  <h1>Script not found</h1>
+  <p>The URL you requested does not exist on this hub. Script paths are <code>case-sensitive</code> — check the exact spelling on the index page.</p>
+  <a class="btn" href="/">BACK TO @@SITE_NAME@@</a>
+</main>
+</body>
+</html>
+"""
+
+
+def main():
+    cfg = load_config()
+    games = scan_scripts(cfg["base_url"])
+
+    if games:
+        cards = "\n".join(render_card(g, i) for i, g in enumerate(games))
+    else:
+        cards = (
+            '      <div class="empty" style="grid-column:1/-1">\n'
+            "        <h3>No scripts hosted yet</h3>\n"
+            "        <p>Drop a .lua file into public/scripts/&lt;game&gt;/ and this page rebuilds itself on the next commit.</p>\n"
+            "      </div>"
+        )
+
+    favicon = "data:image/svg+xml," + urllib.parse.quote(FAVICON_SVG, safe="")
+    year = str(datetime.now(timezone.utc).year)
+
+    def fill(template):
+        return (template
+                .replace("@@FAVICON@@", favicon)
+                .replace("@@LOGO@@", HEADER_LOGO)
+                .replace("@@GHMARK@@", GITHUB_MARK)
+                .replace("@@SITE_NAME@@", html.escape(cfg["site_name"]))
+                .replace("@@TAGLINE@@", html.escape(cfg["tagline"]))
+                .replace("@@GITHUB_URL@@", html.escape(cfg["github_url"], quote=True))
+                .replace("@@BASE_URL@@", html.escape(cfg["base_url"], quote=True))
+                .replace("@@YEAR@@", year)
+                .replace("@@SCRIPTS_COUNT@@", str(len(games)))
+                .replace("@@CARDS@@", cards))
+
+    out_index = PUBLIC / "index.html"
+    out_404 = PUBLIC / "404.html"
+    out_index.parent.mkdir(parents=True, exist_ok=True)
+    out_index.write_text(fill(PAGE_TEMPLATE), encoding="utf-8")
+    out_404.write_text(fill(PAGE_404), encoding="utf-8")
+
+    print("[ok] %s written (%s bytes)" % (out_index, format(len(out_index.read_text(encoding="utf-8")), ",")))
+    print("[ok] %s written" % out_404)
+    print("[ok] %d script(s) indexed against %s" % (len(games), cfg["base_url"]))
+    for g in games:
+        print("     - %s  ->  %s" % (g["title"], g["url"]))
+
+
+if __name__ == "__main__":
+    main()
