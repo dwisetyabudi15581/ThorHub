@@ -34,7 +34,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 
 const GITHUB_RAW =
-  'https://raw.githubusercontent.com/dwisetyabudi15581/ThorHub/main/ThorHub.lua'
+  'https://raw.githubusercontent.com/dwisetyabudi15581/ThorHub/main/public/ThorHub.lua'
 
 const FITUR = [
   {
