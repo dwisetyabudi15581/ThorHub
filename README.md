@@ -90,6 +90,14 @@ python3 -m http.server -d public 8000
 
 *(This table is illustrative — the live, always-current list is the index page itself.)*
 
+## Vendored files
+
+| File | Origin | Why |
+|------|--------|-----|
+| `public/vendor/DiscordLink.lua` | tienkhanh1/spicy | The in-game Discord popup is served from this domain, not GitHub. Edit `INVITE_URL` inside it to point the popup at **your own** Discord server. |
+
+The Venyx UI library itself is loaded from Luarmor's own CDN (`api.luarmor.net`) via the original author's redirector — deliberately left untouched, since it is Luarmor's protected distribution channel and the most stable link in the chain. Runtime dependencies: `thorhub.vercel.app` (self) + Luarmor CDN. GitHub is never contacted by the game client.
+
 ## Notes
 
 - The `Steal an Egg` script is a ThorHub rebrand of the original Chilli Hub build (credits: tienkhanh1). It is keyless and was audited to contain no telemetry/webhooks.
