@@ -101,4 +101,5 @@ The Venyx UI library itself is loaded from Luarmor's own CDN (`api.luarmor.net`)
 ## Notes
 
 - The `Steal an Egg` script is a ThorHub rebrand of the original Chilli Hub build (credits: tienkhanh1). It is keyless and was audited to contain no telemetry/webhooks.
+- **Executor compatibility (v1.4):** the loader embeds a pure-Luau polyfill of the full `buffer` library (26 functions). It auto-installs **only** when the executor has no complete native `buffer` (common on Delta, Codex, Arceus X, Hydrogen, Fluxus, Solara and older PC executors), which previously made the loadstring fail with "[ThorHub] Executor tidak mendukung library buffer". The polyfill is byte-exact with native Luau semantics — validated with 6,318 differential tests against the official `luau` CLI, and references in the payload are renamed to a non-builtin global so it also survives executors that resolve builtin globals through the VM import registry.
 - For educational purposes only. Not affiliated with Roblox Corporation. Using scripts violates Roblox ToS — use at your own risk.
